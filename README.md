@@ -47,7 +47,7 @@ Run the script with **source item** and **destination folder** pairs. Follow the
 
 4. **Running the Script**:
    - Execute the script with pairs of source items and destination folders as arguments.
-   - Example: `./script.sh <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]`
+   - Example: `fflot <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]`
 
 5. **Ownership Change Conditions**:
    - The script changes ownership of the copied items only if *both* `NEW_USER` and `NEW_GROUP` are set to values other than `None`.
