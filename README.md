@@ -50,7 +50,7 @@ Run the script with **source item** and **destination folder** pairs. Follow the
    - Example: `fflot <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]`
 
 5. **Ownership Change Conditions**:
-   - The script changes ownership of the copied items only if *both* `NEW_USER` and `NEW_GROUP` are set to values other than `None`.
+   - The script changes ownership of the copied items only if *both* `NEW_USER` and `NEW_GROUP` are set to values other than `""`.
 
 Remember to ensure that the script has the necessary permissions to execute and modify file ownership.
 
