@@ -3,9 +3,9 @@
 set -e
 set -o pipefail
 
-# Default configurations
-NEW_USER=""
-NEW_GROUP=""
+# Default configurations - can be overridden in command line
+NEW_USER=""  # Leave empty if ownership change is not necessary.
+NEW_GROUP="" # Both NEW_USER and NEW_GROUP must be set in order for chown to be executed!
 MAX_PARALLEL_COPIES=5
 RSYNC_PARAMETERS="-av"
 COLOR=1
@@ -164,7 +164,7 @@ cleanup_un_files() {
     echo "Checking for and removing leftover '_un' files..."
     for path in "${paths[@]}"; do
         if [ -d "$path" ]; then
-            # Find and delete files ending with _un in the source directory
+            # Find and delete "_un" files in the affected directories. These seem to be temporary rsync files that are sometimes left around.
             find "$path" -type f -name "_un" -delete
         fi
     done
