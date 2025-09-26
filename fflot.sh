@@ -119,7 +119,7 @@ cleanup_un_files() {
     for src in "${sources[@]}"; do
         if [ -d "$src" ]; then
             # Find and delete files ending with _un in the source directory
-            find "$src" -type f -name "*_un" -delete
+            find "$src" -type f -name "_un" -delete
         fi
     done
     echo "Cleanup complete."
