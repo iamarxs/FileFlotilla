@@ -2,7 +2,13 @@
 
 ## Functionality
 
-A script that uses rsync and simple background processing to efficiently parallelize the copying of files and folders.
+FileFlotilla is a shell script designed to efficiently copy multiple files and folders in parallel. It leverages `rsync` for robust data transfer and enhances it with the following features:
+
+-   **Parallel Processing**: Copies multiple items simultaneously to speed up bulk transfers.
+-   **Configurable via Command-Line**: All settings, including user/group ownership, the number of parallel jobs, and `rsync` parameters, can be configured with command-line flags.
+-   **Error Handling**: The script tracks the exit status of each `rsync` job and reports any failures at the end.
+-   **Color-Coded Logging**: Provides clear, color-coded output for better readability.
+-   **Signal Handling**: Gracefully terminates all running `rsync` jobs if the script is interrupted.
 
 ---
 
@@ -30,29 +36,44 @@ To install the script system-wide, follow these instructions:
 
 ## Usage
 
-Run the script with **source item** and **destination folder** pairs. Follow these steps:
+The script is executed by providing pairs of source items and destination folders. You can customize its behavior using the command-line options below.
 
-1. **Modify Ownership Variables**:
-   - At the top of the script, find the variables `NEW_USER` and `NEW_GROUP`.
-   - Set these variables to the desired username and group name to change file ownership accordingly.
-   - If you wish to skip the ownership change, leave these variables as `""` (empty strings).
+### Command-Line Execution
 
-2. **Modify amount of parallel copies**:
-   - At the top of the script, find the variable `MAX_PARALLEL_COPIES`.
-   - Set the variable to the desired amount of copy processes to be run in parallel.
+`fflot [OPTIONS] <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]`
 
-3. **Modify rsync parameters**:
-   - At the top of the script, find the variable `RSYNC_PARAMETERS`.
-   - Set the variable to the desired rsync parameters when executing a copy.
+-   Paths with spaces or special characters should be properly quoted.
 
-4. **Running the Script**:
-   - Execute the script with pairs of source items and destination folders as arguments.
-   - Example: `fflot <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]`
+### Options
 
-5. **Ownership Change Conditions**:
-   - The script changes ownership of the copied items only if *both* `NEW_USER` and `NEW_GROUP` are set to values other than `""`.
+| Flag | Option | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `-u` | `--user` | Sets the new user for the copied files. | `""` |
+| `-g` | `--group` | Sets the new group for the copied files. | `""` |
+| `-p` | `--parallel` | Sets the maximum number of parallel rsync jobs. | `5` |
+| `-r` | `--rsync-params` | Sets the parameters for rsync. | `"-av"` |
+| `-c` | `--no-color` | Disables color output. | N/A |
+| `-h` | `--help` | Displays the help message. | N/A |
 
-Remember to ensure that the script has the necessary permissions to execute and modify file ownership.
+> **Note**: While command-line flags are recommended for per-run customization, you can still modify the default behaviors by editing the configuration variables at the top of the `fflot.sh` script.
+
+### Ownership Change
+
+-   File ownership is changed only when both `--user` and `--group` are specified with non-empty values.
+
+### Examples
+
+-   **Basic copy of two files to a backup folder**:
+
+    `fflot "file1.txt" "/mnt/backups/" "file2.txt" "/mnt/backups/"`
+
+-   **Copy a directory and change ownership**:
+
+    `fflot --user "www-data" --group "www-data" "/var/www/html" "/mnt/backups/"`
+
+-   **Copy with custom rsync parameters and more parallel jobs**:
+
+    `fflot --parallel 10 --rsync-params "-a --info=progress2" "large-dataset/" "/mnt/nas/datasets/"`
 
 ---
 
@@ -62,8 +83,18 @@ The script manages parallel `rsync` operations to efficiently copy files and dir
 
 1. **Iterating Through Inputs**: The script processes the command-line arguments in pairs of source and destination.
 2. **Launching Background Jobs**: For each pair, it initiates an `rsync` command as a background process.
-3. **Controlling Parallelism**: A `while` loop actively monitors the number of running `rsync` jobs. If the count reaches the `MAX_PARALLEL_COPIES` limit, the script pauses and waits for one of the jobs to finish before starting a new one. This is achieved using `jobs -r` to count running jobs and `wait -n` to pause.
-4. **Final Synchronization**: After all copy tasks have been started, the script waits for all remaining background `rsync` processes to complete before finishing. This ensures that the script only exits after every file has been successfully copied.
+3. **Controlling Parallelism**: A `while` loop actively monitors the number of running `rsync` jobs. If the count reaches the `MAX_PARALLEL_COPIES` limit (configurable with the `--parallel` flag), the script pauses and waits for one of the jobs to finish before starting a new one. This is achieved using `jobs -r` to count running jobs and `wait -n` to pause.
+4. **Final Synchronization**: After all copy tasks have been started, the script waits for all remaining background `rsync` processes to complete before finishing.
+
+---
+
+## Error Handling and Reporting
+
+The script monitors each `rsync` process to check if it completes successfully.
+
+-   If an `rsync` job fails, the script records the failure and continues with other copy operations.
+-   After all jobs are complete, the script reports the total number of failed copies and lists the specific source-to-destination pairs that failed.
+-   If any copy operation fails, the script will exit with a non-zero status code.
 
 ---
 
