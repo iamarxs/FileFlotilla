@@ -10,7 +10,7 @@ MAX_PARALLEL_COPIES=5
 RSYNC_PARAMETERS="-av"
 COLOR=1
 declare -a pids=()
-declare -a source_items=()
+declare -a cleanup_paths=()
 declare -A pid_to_src_dst=()
 declare -a failed_copies=()
 error_count=0
@@ -114,12 +114,12 @@ perform_rsync() {
 
 # Function to clean up leftover '_un' files
 cleanup_un_files() {
-    local sources=("$@")
+    local paths=("$@")
     echo "Checking for and removing leftover '_un' files..."
-    for src in "${sources[@]}"; do
-        if [ -d "$src" ]; then
+    for path in "${paths[@]}"; do
+        if [ -d "$path" ]; then
             # Find and delete files ending with _un in the source directory
-            find "$src" -type f -name "_un" -delete
+            find "$path" -type f -name "_un" -delete
         fi
     done
     echo "Cleanup complete."
@@ -131,7 +131,7 @@ while [ $# -gt 0 ]; do
     dst_folder=$(process_path "$2")
     shift 2
     create_directory "$dst_folder"
-    source_items+=("$src_item")
+    cleanup_paths+=("$src_item" "$dst_folder")
 
     perform_rsync "$src_item" "$dst_folder" &
     pid=$!
@@ -152,7 +152,7 @@ for pid in "${pids[@]}"; do
 done
 
 # Clean up any leftover files from the source directories
-cleanup_un_files "${source_items[@]}"
+cleanup_un_files "${cleanup_paths[@]}"
 
 # Report the total number of errors
 if [ $error_count -eq 0 ]; then

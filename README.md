@@ -69,7 +69,7 @@ The script manages parallel `rsync` operations to efficiently copy files and dir
 
 ## Post-Copy Cleanup
 
-After all copying operations are complete, the script performs a cleanup step. It searches through the source directories for any files ending with `_un` and deletes them. This is intended to remove temporary or unwanted files that may be left over from other processes.
+After all copying operations are complete, the script performs a cleanup step. It searches through the source and destination directories for any files named `_un` and deletes them. This is intended to remove temporary or unwanted files that may be left over from other processes.
 
 ---
 
