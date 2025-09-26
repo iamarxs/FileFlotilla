@@ -10,6 +10,9 @@ MAX_PARALLEL_COPIES=5
 RSYNC_PARAMETERS="-av"
 COLOR=1
 declare -a pids=()
+declare -a source_items=()
+declare -A pid_to_src_dst=()
+declare -a failed_copies=()
 error_count=0
 
 # Check for even number of arguments
@@ -87,6 +90,13 @@ perform_rsync() {
     local dst=$2
     local rsync_opts=($RSYNC_PARAMETERS)
 
+    if [ -d "$src" ]; then
+        # If the source is a directory, ensure it doesn't have a trailing slash
+        # to make rsync copy the directory itself.
+        # The `${src%/}` syntax removes the trailing slash.
+        src=${src%/}
+    fi
+
     if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
         rsync_opts+=(--chown="$NEW_USER:$NEW_GROUP")
     fi
@@ -102,15 +112,31 @@ perform_rsync() {
     fi
 }
 
+# Function to clean up leftover '_un' files
+cleanup_un_files() {
+    local sources=("$@")
+    echo "Checking for and removing leftover '_un' files..."
+    for src in "${sources[@]}"; do
+        if [ -d "$src" ]; then
+            # Find and delete files ending with _un in the source directory
+            find "$src" -type f -name "*_un" -delete
+        fi
+    done
+    echo "Cleanup complete."
+}
+
 # Populate the queue
 while [ $# -gt 0 ]; do
     src_item=$(process_path "$1")
     dst_folder=$(process_path "$2")
     shift 2
     create_directory "$dst_folder"
+    source_items+=("$src_item")
 
     perform_rsync "$src_item" "$dst_folder" &
-    pids+=($!)
+    pid=$!
+    pids+=($pid)
+    pid_to_src_dst[$pid]="$src_item -> $dst_folder"
 
     while [ "$(jobs -r | wc -l)" -ge $MAX_PARALLEL_COPIES ]; do
         wait -n
@@ -121,13 +147,23 @@ done
 for pid in "${pids[@]}"; do
     if ! wait "$pid"; then
         error_count=$((error_count + 1))
+        failed_copies+=("${pid_to_src_dst[$pid]}")
     fi
 done
+
+# Clean up any leftover files from the source directories
+cleanup_un_files "${source_items[@]}"
 
 # Report the total number of errors
 if [ $error_count -eq 0 ]; then
     echo "All files copied successfully."
 else
     echo "$error_count file(s) failed to copy."
+    if [ ${#failed_copies[@]} -gt 0 ]; then
+        echo "The following copy operations failed:"
+        for copy in "${failed_copies[@]}"; do
+            echo "  - $copy"
+        done
+    fi
     exit 1
 fi
