@@ -3,7 +3,7 @@
 set -e
 set -o pipefail
 
-# Hard-coded configurations
+# Default configurations - can be overridden in command line
 NEW_USER=""  # Leave empty if ownership change is not necessary.
 NEW_GROUP="" # Both NEW_USER and NEW_GROUP must be set in order for chown to be executed!
 MAX_PARALLEL_COPIES=5
@@ -15,14 +15,56 @@ declare -A pid_to_src_dst=()
 declare -a failed_copies=()
 error_count=0
 
+# Function to display usage information
+usage() {
+    echo "Usage: $0 [OPTIONS] <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]"
+    echo "Options:"
+    echo "  -u, --user <user>        Set the new user for copied files."
+    echo "  -g, --group <group>      Set the new group for copied files."
+    echo "  -p, --parallel <num>     Set the maximum number of parallel rsync jobs (default: 5)."
+    echo "  -r, --rsync-params <params> Set the parameters for rsync (default: '-av')."
+    echo "  -c, --no-color           Disable color output."
+    echo "  -h, --help               Display this help message."
+    echo "Note: Paths with spaces or special characters should be properly quoted."
+    exit 1
+}
+
+# Parse command-line options
+while [[ "$1" =~ ^- ]]; do
+    case "$1" in
+        -u|--user)
+            NEW_USER="$2"
+            shift 2
+            ;;
+        -g|--group)
+            NEW_GROUP="$2"
+            shift 2
+            ;;
+        -p|--parallel)
+            MAX_PARALLEL_COPIES="$2"
+            shift 2
+            ;;
+        -r|--rsync-params)
+            RSYNC_PARAMETERS="$2"
+            shift 2
+            ;;
+        -c|--no-color)
+            COLOR=0
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
 # Check for even number of arguments
 if [ $# -eq 0 ] || [ $(($# % 2)) -ne 0 ]; then
-  if [ $COLOR -eq 1 ]; then
-    echo -e "\e[0;38;5;39mUsage: $0 <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]\e[0m"
-  else
-    echo "Usage: $0 <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]"
-  fi
-    exit 1
+    usage
 fi
 
 # Function to log messages
@@ -40,18 +82,22 @@ log_copy() {
 
 # Function to handle SIGINT and SIGTERM
 handle_signal() {
-    echo "Signal caught, exiting..."
+    echo -e "\nSignal caught. Terminating running rsync processes..."
+    # Kill all child processes (rsync jobs) spawned by this script to prevent orphans.
+    local pids_to_kill
+    pids_to_kill=$(jobs -p)
+    if [ -n "$pids_to_kill" ]; then
+        # The space-separated list of PIDs is fed to kill.
+        # Errors are redirected to /dev/null to avoid messages about processes
+        # that have already finished.
+        kill $pids_to_kill >/dev/null 2>&1
+    fi
+    echo "All rsync jobs terminated. Exiting."
     exit 1
 }
 
 # Setup signal handling
 trap handle_signal SIGINT SIGTERM
-
-# Function to process and unescape paths
-process_path() {
-    local path=$1
-    echo "${path//\\ / }" # Replace '\ ' with ' '
-}
 
 # Make sure the given path exists, and change its ownership if NEW_USER and NEW_GROUP have been
 # configured.
@@ -103,7 +149,7 @@ perform_rsync() {
 
     log_copy "Starting rsync" "$src" "$dst"
     # shellcheck disable=SC2086
-    if rsync "${rsync_opts[@]}" "$src" "$dst"; then
+    if rsync "${rsync_opts[@]}" -- "$src" "$dst"; then
         log_copy "Rsync successful" "$src" "$dst"
         return 0
     else
@@ -118,7 +164,7 @@ cleanup_un_files() {
     echo "Checking for and removing leftover '_un' files..."
     for path in "${paths[@]}"; do
         if [ -d "$path" ]; then
-            # Find and delete files ending with _un in the source directory
+            # Find and delete "_un" files in the affected directories. These seem to be temporary rsync files that are sometimes left around.
             find "$path" -type f -name "_un" -delete
         fi
     done
@@ -127,8 +173,8 @@ cleanup_un_files() {
 
 # Populate the queue
 while [ $# -gt 0 ]; do
-    src_item=$(process_path "$1")
-    dst_folder=$(process_path "$2")
+    src_item="$1"
+    dst_folder="$2"
     shift 2
     create_directory "$dst_folder"
     cleanup_paths+=("$src_item" "$dst_folder")
