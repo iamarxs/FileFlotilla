@@ -7,12 +7,18 @@ set -o pipefail
 NEW_USER=""  # Leave empty if ownership change is not necessary.
 NEW_GROUP="" # Both NEW_USER and NEW_GROUP must be set in order for chown to be executed!
 MAX_PARALLEL_COPIES=5
-RSYNC_PARAMETERS="-av --inplace"
-COPY_QUEUE=()
+RSYNC_PARAMETERS="-av"
+COLOR=1
+declare -a pids=()
+error_count=0
 
 # Check for even number of arguments
 if [ $# -eq 0 ] || [ $(($# % 2)) -ne 0 ]; then
+  if [ $COLOR -eq 1 ]; then
+    echo -e "\e[0;38;5;39mUsage: $0 <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]\e[0m"
+  else
     echo "Usage: $0 <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]"
+  fi
     exit 1
 fi
 
@@ -21,7 +27,12 @@ log_copy() {
     local message=$1
     local src=$2
     local dst=$3
-    echo "[$(date)] $message - Source: $src, Destination: $dst"
+    if [ $COLOR -eq 1 ]; then
+      echo -e "[$(date)] \e[0;38;5;153m$message\e[0m - \e[2;38;5;228mSource:\e[0m $src, \e[2;38;5;159mDestination:\e[0m $dst"
+    else
+      echo "[$(date)] $message - Source: $src, Destination: $dst"
+    fi
+    
 }
 
 # Function to handle SIGINT and SIGTERM
@@ -44,68 +55,49 @@ process_path() {
 create_directory() {
     local path=$1
     if ! mkdir -p "$1"; then
+      if [ $COLOR -eq 1 ]; then
+        echo -e "\e[2;38;5;160mDirectory creation failed - $1\e[0m"
+      else
         echo "Directory creation failed - $1"
-        exit 1
+      fi
+      exit 1
     else
         echo "Directory created - $1"
     fi
     if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
-        if ! chown "$NEW_USER:$NEW_GROUP" "$1"; then
-            echo "Directory ownership change failed - $1"
+      if ! chown "$NEW_USER:$NEW_GROUP" "$1"; then
+        if [ $COLOR -eq 1 ]; then
+          echo -e "\e[2;38;5;160mDirectory ownership change failed - $1\e[0m"
         else
-            echo "Directory ownership changed to ${NEW_USER}:${NEW_GROUP} - $1"
+          echo "Directory ownership change failed - $1"
         fi
+      else
+        if [ $COLOR -eq 1 ]; then
+          echo -e "\e[0;38;5;27mDirectory ownership changed to ${NEW_USER}:${NEW_GROUP} - $1\e[0m"
+        else
+          echo "Directory ownership changed to ${NEW_USER}:${NEW_GROUP} - $1"
+        fi
+      fi
     fi
 }
 
-# Function to add files and directories to the queue
-add_to_queue() {
-    local src
-    local dst
-    src=$(process_path "$1")
-    dst=$(process_path "$2")
-    COPY_QUEUE+=("$src:$dst")
-}
-
-# Function to recursively parse directories and add to queue
-parse_directory() {
-    local dir="$1"
-    local dst_dir="$2"
-
-    for item in "$dir"/*; do
-        if [ -d "$item" ]; then
-            # If item is a directory, recurse into it
-            parse_directory "$item" "$dst_dir/$(basename "$item")"
-        elif [ -f "$item" ]; then
-            # If item is a file, add to the queue
-            local dst
-            dst="$dst_dir/$(basename "$item")"
-            add_to_queue "$item" "$dst"
-        fi
-    done
-}
-
 # Function to perform the copy operation
-copy_file() {
+perform_rsync() {
     local src=$1
     local dst=$2
-    # Ensure destination directory exists
-    create_directory "$(dirname "$dst")"
+    local rsync_opts=($RSYNC_PARAMETERS)
 
-    log_copy "Starting copy" "$src" "$dst"
+    if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
+        rsync_opts+=(--chown="$NEW_USER:$NEW_GROUP")
+    fi
+
+    log_copy "Starting rsync" "$src" "$dst"
     # shellcheck disable=SC2086
-    if rsync $RSYNC_PARAMETERS "$src" "$dst"; then
-        if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
-            if ! chown "$NEW_USER:$NEW_GROUP" "$dst"; then
-                log_copy "File ownership change failed" "$src" "$dst"
-                return 1
-            fi
-            echo "File ownership changed to ${NEW_USER}:${NEW_GROUP} - $(basename "$dst")"
-        fi
-        log_copy "Copy successful" "$src" "$dst"
+    if rsync "${rsync_opts[@]}" "$src" "$dst"; then
+        log_copy "Rsync successful" "$src" "$dst"
         return 0
     else
-        log_copy "Copy failed" "$src" "$dst"
+        log_copy "Rsync failed" "$src" "$dst"
         return 1
     fi
 }
@@ -117,33 +109,20 @@ while [ $# -gt 0 ]; do
     shift 2
     create_directory "$dst_folder"
 
-    if [ -d "$src_item" ]; then
-        parse_directory "$src_item" "${dst_folder}/$(basename "$src_item")"
-    elif [ -f "$src_item" ]; then
-        dst_path="${dst_folder}/$(basename "$src_item")"
-        add_to_queue "$src_item" "$dst_path"
-    fi
-done
+    perform_rsync "$src_item" "$dst_folder" &
+    pids+=($!)
 
-# Initialize error counter
-error_count=0
-
-# Function to manage parallel jobs
-manage_jobs() {
     while [ "$(jobs -r | wc -l)" -ge $MAX_PARALLEL_COPIES ]; do
         wait -n
     done
-}
-
-# Process the queue
-for item in "${COPY_QUEUE[@]}"; do
-    IFS=':' read -r src dst <<<"$item"
-    copy_file "$src" "$dst" &
-    manage_jobs
 done
 
 # Wait for all background jobs to finish
-wait
+for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+        error_count=$((error_count + 1))
+    fi
+done
 
 # Report the total number of errors
 if [ $error_count -eq 0 ]; then
