@@ -1,5 +1,7 @@
 # FileFlotilla
 
+### *Note: This is a modified version that was purpose-built for QNAP-TS233 (with Entware-installed newer rsync version, but this should work with the built-in one as well). This probably works just as well for other QNAP NAS devices of the same era and capability.*
+
 ## Functionality
 
 FileFlotilla is a shell script designed to efficiently copy multiple files and folders in parallel. It leverages `rsync` for robust data transfer and enhances it with the following features:
@@ -50,7 +52,9 @@ The script is executed by providing pairs of source items and destination folder
 | :--- | :--- | :--- | :--- |
 | `-u` | `--user` | Sets the new user for the copied files. | `""` |
 | `-g` | `--group` | Sets the new group for the copied files. | `""` |
-| `-p` | `--parallel` | Sets the maximum number of parallel rsync jobs. | `5` |
+| `-f` | `--file-mode` | Sets the new chmod attributes for copied files. | `""` |
+| `-u` | `--dir-mode` | Sets the new chmod attributes for copied directories. | `""` |
+| `-p` | `--parallel` | Sets the maximum number of parallel rsync jobs. | `2` |
 | `-r` | `--rsync-params` | Sets the parameters for rsync. | `"-av"` |
 | `-c` | `--no-color` | Disables color output. | N/A |
 | `-h` | `--help` | Displays the help message. | N/A |
