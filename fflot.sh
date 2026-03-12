@@ -1,215 +1,147 @@
 #!/bin/bash
 
-set -e
-set -o pipefail
-
-# Default configurations - can be overridden in command line
-NEW_USER=""  # Leave empty if ownership change is not necessary.
-NEW_GROUP="" # Both NEW_USER and NEW_GROUP must be set in order for chown to be executed!
-MAX_PARALLEL_COPIES=5
-RSYNC_PARAMETERS="-av"
+# Default configurations
+NEW_USER=""
+NEW_GROUP=""
+FILE_MODE=""
+DIR_MODE=""
+MAX_PARALLEL_COPIES=2
+RSYNC_PARAMETERS="-avh"
 COLOR=1
+
 declare -a pids=()
 declare -a cleanup_paths=()
-declare -A pid_to_src_dst=()
+declare -a pid_descriptions=()
 declare -a failed_copies=()
 error_count=0
+current_running=0
 
-# Function to display usage information
 usage() {
-    echo "Usage: $0 [OPTIONS] <source_item1> <destination_folder1> [<source_item2> <destination_folder2> ...]"
-    echo "Options:"
-    echo "  -u, --user <user>        Set the new user for copied files."
-    echo "  -g, --group <group>      Set the new group for copied files."
-    echo "  -p, --parallel <num>     Set the maximum number of parallel rsync jobs (default: 5)."
-    echo "  -r, --rsync-params <params> Set the parameters for rsync (default: '-av')."
-    echo "  -c, --no-color           Disable color output."
-    echo "  -h, --help               Display this help message."
-    echo "Note: Paths with spaces or special characters should be properly quoted."
+    echo "Usage: $0 [OPTIONS] <src1> <dst1> ..."
     exit 1
 }
 
-# Parse command-line options
+
+
 while [[ "$1" =~ ^- ]]; do
     case "$1" in
-        -u|--user)
-            NEW_USER="$2"
-            shift 2
-            ;;
-        -g|--group)
-            NEW_GROUP="$2"
-            shift 2
-            ;;
-        -p|--parallel)
-            MAX_PARALLEL_COPIES="$2"
-            shift 2
-            ;;
-        -r|--rsync-params)
-            RSYNC_PARAMETERS="$2"
-            shift 2
-            ;;
-        -c|--no-color)
-            COLOR=0
-            shift
-            ;;
-        -h|--help)
-            usage
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            ;;
+        -u|--user) NEW_USER="$2"; shift 2 ;;
+        -g|--group) NEW_GROUP="$2"; shift 2 ;;
+        -f|--file-mode) FILE_MODE="$2"; shift 2 ;;
+        -d|--dir-mode) DIR_MODE="$2"; shift 2 ;;
+        -p|--parallel) MAX_PARALLEL_COPIES="$2"; shift 2 ;;
+        -r|--rsync-params) RSYNC_PARAMETERS="$2"; shift 2 ;;
+        -c|--no-color) COLOR=0; shift ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $1"; usage ;;
     esac
 done
 
-# Check for even number of arguments
-if [ $# -eq 0 ] || [ $(($# % 2)) -ne 0 ]; then
-    usage
-fi
+# Check for even number of arguments (after configuration arguments)
+if [ $# -eq 0 ] || [ $(($# % 2)) -ne 0 ]; then usage; fi
 
-# Function to log messages
 log_copy() {
-    local message=$1
-    local src=$2
-    local dst=$3
-    if [ $COLOR -eq 1 ]; then
-      echo -e "[$(date)] \e[0;38;5;153m$message\e[0m - \e[2;38;5;228mSource:\e[0m $src, \e[2;38;5;159mDestination:\e[0m $dst"
-    else
-      echo "[$(date)] $message - Source: $src, Destination: $dst"
-    fi
-    
+    local msg=$1 src=$2 dst=$3
+    [ $COLOR -eq 1 ] && echo -e "[$(date)] \e[0;38;5;153m$msg\e[0m - Source: $src, Dst: $dst" || echo "[$(date)] $msg - Source: $src, Dst: $dst"
 }
 
-# Function to handle SIGINT and SIGTERM
-handle_signal() {
-    echo -e "\nSignal caught. Terminating running rsync processes..."
-    # Kill all child processes (rsync jobs) spawned by this script to prevent orphans.
-    local pids_to_kill
-    pids_to_kill=$(jobs -p)
-    if [ -n "$pids_to_kill" ]; then
-        # The space-separated list of PIDs is fed to kill.
-        # Errors are redirected to /dev/null to avoid messages about processes
-        # that have already finished.
-        kill $pids_to_kill >/dev/null 2>&1
-    fi
-    echo "All rsync jobs terminated. Exiting."
-    exit 1
+# Function to process and unescape paths
+process_path() {
+    local path=$1
+    echo "${path//\\ / }" # Replace '\ ' with ' '
 }
 
-# Setup signal handling
-trap handle_signal SIGINT SIGTERM
-
-# Make sure the given path exists, and change its ownership if NEW_USER and NEW_GROUP have been
-# configured.
 create_directory() {
     local path=$1
-    if ! mkdir -p "$1"; then
-      if [ $COLOR -eq 1 ]; then
-        echo -e "\e[2;38;5;160mDirectory creation failed - $1\e[0m"
-      else
-        echo "Directory creation failed - $1"
-      fi
-      exit 1
-    else
-        echo "Directory created - $1"
-    fi
-    if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
-      if ! chown "$NEW_USER:$NEW_GROUP" "$1"; then
-        if [ $COLOR -eq 1 ]; then
-          echo -e "\e[2;38;5;160mDirectory ownership change failed - $1\e[0m"
-        else
-          echo "Directory ownership change failed - $1"
-        fi
-      else
-        if [ $COLOR -eq 1 ]; then
-          echo -e "\e[0;38;5;27mDirectory ownership changed to ${NEW_USER}:${NEW_GROUP} - $1\e[0m"
-        else
-          echo "Directory ownership changed to ${NEW_USER}:${NEW_GROUP} - $1"
-        fi
-      fi
-    fi
+    [ ! -d "$path" ] && mkdir -p "$path"
+    [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ] && chown "$NEW_USER:$NEW_GROUP" "$path" 2>/dev/null
+    [ -n "$DIR_MODE" ] && chmod "$DIR_MODE" "$path" 2>/dev/null
 }
 
-# Function to perform the copy operation
-perform_rsync() {
-    local src=$1
-    local dst=$2
-    local rsync_opts=($RSYNC_PARAMETERS)
+cleanup_un_files() {
+    echo "Cleaning up '_un' files..."
+    for path in "$@"; do
+        if [ -d "$path" ]; then
+            # Strictly maxdepth 1 to avoid CACHEDEV traversal
+            find "$path" -maxdepth 1 -type f -name "_un" -exec rm -f {} \; 2>/dev/null
+        fi
+    done
+}
 
-    if [ -d "$src" ]; then
-        # If the source is a directory, ensure it doesn't have a trailing slash
-        # to make rsync copy the directory itself.
-        # The `${src%/}` syntax removes the trailing slash.
-        src=${src%/}
-    fi
+# The actual workhorse function executed in the background
+run_job() {
+    local src=$(process_path "$1")
+    local dst=$(process_path "$2")
+    local opts=($RSYNC_PARAMETERS)
+    # Permission handling (works in rsync 2.6.7+)
+    local chmod_dir_arg=""
+    local chmod_file_arg=""
+    [ -n "$DIR_MODE" ] && chmod_dir_arg="$DIR_MODE"
+    [ -n "$FILE_MODE" ] && chmod_file_arg="$FILE_MODE"
 
-    if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
-        rsync_opts+=(--chown="$NEW_USER:$NEW_GROUP")
-    fi
-
-    log_copy "Starting rsync" "$src" "$dst"
-    # shellcheck disable=SC2086
-    if rsync "${rsync_opts[@]}" -- "$src" "$dst"; then
-        log_copy "Rsync successful" "$src" "$dst"
+    # 1. Perform Rsync
+    local src_clean="${src%/}"
+    if rsync "${opts[@]}" -- "$src_clean" "$dst"; then
+        # 2. Manual post-copy chown (since --chown is missing)
+        local item_name
+        item_name=$(basename "$src_clean")
+        if [ -n "$NEW_USER" ] && [ -n "$NEW_GROUP" ]; then
+            # Target the specific item inside the destination folder
+            local item_name=$(basename "$src")
+            chown -R "$NEW_USER:$NEW_GROUP" "$dst/$item_name" 2>/dev/null
+        fi
+        [[ -d "$dst/$item_name" ]] && [ -n "$chmod_dir_arg" ] && chmod "$chmod_dir_arg" "$dst/$item_name"
+        if [[ -d "$dst/$item_name" ]]; then
+            [ -n "$chmod_dir_arg" ]  && find "$dst/$item_name" -type d -exec chmod "$chmod_dir_arg" {} +
+            [ -n "$chmod_file_arg" ] && find "$dst/$item_name" -type f -exec chmod "$chmod_file_arg" {} +
+        fi
+        [[ -f "$dst/$item_name" ]] && [ -n "$chmod_file_arg" ] && chmod "$chmod_file_arg" "$dst/$item_name"
         return 0
     else
-        log_copy "Rsync failed" "$src" "$dst"
         return 1
     fi
 }
 
-# Function to clean up leftover '_un' files
-cleanup_un_files() {
-    local paths=("$@")
-    echo "Checking for and removing leftover '_un' files..."
-    for path in "${paths[@]}"; do
-        if [ -d "$path" ]; then
-            # Find and delete "_un" files in the affected directories. These seem to be temporary rsync files that are sometimes left around.
-            find "$path" -type f -name "_un" -delete
-        fi
-    done
-    echo "Cleanup complete."
-}
-
-# Populate the queue
 while [ $# -gt 0 ]; do
-    src_item="$1"
-    dst_folder="$2"
+    src_item=$(process_path "$1")
+    dst_folder=$(process_path "$2")
     shift 2
+
     create_directory "$dst_folder"
-    cleanup_paths+=("$src_item" "$dst_folder")
 
-    perform_rsync "$src_item" "$dst_folder" &
+    # Resolve paths for cleanup
+    src_parent=$(cd "$(dirname "$src_item")" && pwd 2>/dev/null || echo "$(dirname "$src_item")")
+    dstbase="$dst_folder/$(basename "$src_item")"
+    dst_resolved=$(cd "$dstbase" && pwd 2>/dev/null || echo "$dst_folder/$(basename "$src_item")")
+    cleanup_paths+=( "$src_parent" "$dst_resolved" )
+
+    log_copy "Starting job" "$src_item" "$dst_folder"
+    
+    # Run in subshell to bundle rsync + chown
+    ( run_job "$src_item" "$dst_folder" ) &
+
     pid=$!
-    pids+=($pid)
-    pid_to_src_dst[$pid]="$src_item -> $dst_folder"
+    pids+=( $pid )
+    pid_descriptions[$pid]="$src_item -> $dst_folder"
+    ((current_running++))
 
-    while [ "$(jobs -r | wc -l)" -ge $MAX_PARALLEL_COPIES ]; do
-        wait -n
+    # Process management loop
+    while [ "$current_running" -ge "$MAX_PARALLEL_COPIES" ]; do
+        sleep 1 # Avoid CPU pinning in 3.2
+        current_running=0
+        for p in "${pids[@]}"; do
+            kill -0 "$p" 2>/dev/null && ((current_running++))
+        done
     done
 done
 
-# Wait for all background jobs to finish
 for pid in "${pids[@]}"; do
     if ! wait "$pid"; then
-        error_count=$((error_count + 1))
-        failed_copies+=("${pid_to_src_dst[$pid]}")
+        ((error_count++))
+        failed_copies+=( "${pid_descriptions[$pid]}" )
     fi
 done
 
-# Clean up any leftover files from the source directories
 cleanup_un_files "${cleanup_paths[@]}"
 
-# Report the total number of errors
-if [ $error_count -eq 0 ]; then
-    echo "All files copied successfully."
-else
-    echo "$error_count file(s) failed to copy."
-    if [ ${#failed_copies[@]} -gt 0 ]; then
-        echo "The following copy operations failed:"
-        for copy in "${failed_copies[@]}"; do
-            echo "  - $copy"
-        done
-    fi
-    exit 1
-fi
+[ "$error_count" -eq 0 ] && echo "Success." || { echo "Failures: $error_count"; exit 1; }
