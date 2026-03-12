@@ -1,5 +1,6 @@
 # FileFlotilla
 
+*Note: A refactored version for QNAP TS-233 (and probably other QNAP devices of the same era and capability) can be found in the alternative branch [qnap-version](https://github.com/iamarxs/FileFlotilla/tree/qnap-version).* 
 ## Functionality
 
 FileFlotilla is a shell script designed to efficiently copy multiple files and folders in parallel. It leverages `rsync` for robust data transfer and enhances it with the following features:
